@@ -602,6 +602,13 @@ class OrderQuerySet(models.QuerySet):
             reg_date__gt=expire_date,
         )    
         return Order.objects.update_orders_status(orders, status)
+
+    def check_expired_daily(self):
+        self.send_reminder_one()
+        self.send_reminder_two()
+
+    def check_expired_hourly(self):
+        self.send_reminder_three()
         
 
 class Order(models.Model):

@@ -4,7 +4,7 @@ from django.utils import timezone
 from django.conf import settings
 from .senders import (
     send_mail, _create_html_table_from_dict, send_template)
-from .models import Ticket, TicketQuerySet
+from .models import Order, Ticket
 from .tasks import process_webhook_payload, process_webhook_payload_synchro
 
 EMAIL = "denistrofimov@pythonmachinelearningcv.com"
@@ -370,28 +370,67 @@ class TicketUpdateTest(TestCase):
         self.assertEqual(ticket.printed_id, data['id'])
         self.assertEqual(ticket.event_name, data['event_name'])
 
-class TicketExpirationTest(TestCase):
+class OrderTest(TestCase):
 
     def setUp(self):
-        "Create new ticket."
-        self.ticket_dict = {
-            "id": "22398586:56559903",
-            "event_id": 830329,
-            "order_id": "17862035",
-            "reg_date": "2018-10-11 00:45:53",
-            "status_raw": "booked",
-            "email": "denistrofimov@pythonmachinelearningcv.com",
-            "surname": "Трофимов",
-            "name": "Денис",
-            "event_name": "Learn Python 11",
-        }
+        "Create new order."
+        self.order_dict = json.load('order.json')
         
-    def test_check_ticket_expiration1(self):
-        self.ticket = Ticket.dict_deserialize(self.ticket_dict)
-        self.ticket.reg_date = timezone.now() - timezone.timedelta(days=1)
-        self.ticket.save()
-        self.assertLessEqual(timezone.timedelta(hours=9), timezone.now() - self.ticket.reg_date)
-        self.ticket.objects.check_expired_ticket()
-        ticket = self.ticket.objects.get_ticket(self.ticket)
-        self.assertEqual(ticket.status, Ticket.STATUS_REMINDED_1)
+    def test_dict_deserialize(self):
+        data = self.order_dict
+        order = Order.dict_deserialize(data)
+        self.assertEqual(order.order_id, int(data['id']))
+        self.assertEqual(order.event_id, int(data['event']['id']))
+        self.assertEqual(order.status, Order.get_status_from_raw(data['status']['name'])
+        self.assertEqual(
+            order.reg_date, 
+            Order.reg_date_to_datatime(data['created_at'])
+        )
+        self.assertEqual(order.email, data['mail'])
+        self.assertEqual(order.name, data["answers"]['name'])
+        self.assertEqual(order.surname, data["answers"]['surname'])
+        self.assertEqual(order.payment_amount, int(data['payment']['amount']))
+        self.assertEqual(order.full_clean(), True)
+
+
+    def test_send_reminder_one(self):
+        self.order = Order.dict_deserialize(self.order_dict)
+        self.order.reg_date = timezone.now() - timezone.timedelta(days=1, hours=1)
+        self.order.save()
+        self.assertLessEqual(timezone.timedelta(days=1), timezone.now() - self.order.reg_date)
+        responses = Order.objects.send_reminder_one()
+        for response in responses:
+            self.assertIn(response[0]['status'], ('sent', 'queued'))
+        order = Order.objects.get_order(self.order)
+        self.assertEqual(order.status, Order.STATUS_REMINDED_1)
+
+    def test_send_reminder_two(self):
+        self.order = Order.dict_deserialize(self.order_dict)
+        self.order.reg_date = timezone.now() - timezone.timedelta(days=2, hours=1)
+        self.order.save()
+        responses = Order.objects.send_reminder_two()
+        for response in responses:
+            self.assertIn(response[0]['status'], ('sent', 'queued'))
+        order = Order.objects.get_order(self.order)
+        self.assertEqual(order.status, Order.STATUS_REMINDED_2)
+
+    def test_send_reminder_three(self):
+        self.order = Order.dict_deserialize(self.order_dict)
+        self.order.reg_date = timezone.now() - timezone.timedelta(hours=70)
+        self.order.save()
+        responses = Order.objects.send_reminder_three()
+        for response in responses:
+            self.assertIn(response[0]['status'], ('sent', 'queued'))
+        order = Order.objects.get_order(self.order)
+        self.assertEqual(order.status, Order.STATUS_REMINDED_3)
+
+
+    def test_check_order_expiration1(self):
+        self.order = Order.dict_deserialize(self.order_dict)
+        self.order.reg_date = timezone.now() - timezone.timedelta(days=1)
+        self.order.save()
+        self.assertLessEqual(timezone.timedelta(hours=9), timezone.now() - self.order.reg_date)
+        self.order.objects.send_reminder_one()
+        order = self.order.objects.get_order(self.order)
+        self.assertEqual(order.status, Order.STATUS_REMINDED_1)
 
