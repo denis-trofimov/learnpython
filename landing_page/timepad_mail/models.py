@@ -30,19 +30,13 @@ class Hook(models.Model):
         "hook_generated_at": "2018-11-17 02:04:04",
         "hook_guid": "b4edbeb5-8544-418a-842c-d61171a5fecb"
     """
-    guid = models.CharField(
+    guid = models.UUIDField(
         'GUID',
-        max_length=37,
+        primary_key=True,
+        editable=False,
     )
     objects = HookQuerySet.as_manager()
 
-    class Meta:
-        indexes = [
-            models.Index(
-                fields=['guid', ], 
-                name='guid_index'
-            ),
-        ]
 
 class TicketQuerySet(models.QuerySet):
     """ Ticket methods.
@@ -411,18 +405,189 @@ class Ticket(models.Model):
                 return ticket, cls.objects.update_ticket_status(ticket)
             return ticket
 
-class Order(models.Model):
-    """ Ticket from the timepad.
 
-        :param event_id: 215813, ID мероприятия
+class OrderQuerySet(models.QuerySet):
+    """ Order methods.
+    
+        What matters, is that implementing the methods on querysets/managers
+        rather than Models would allow for more efficient queries.
+        https://sunscrapers.com/blog/where-to-put-business-logic-django/
+    """
+
+    def get_order(self, order):
+        "Get order instance."
+        try:
+            return self.get(order_id=order.order_id, event_id=order.event_id)
+        except ObjectDoesNotExist as exception:
+            logger.error(f'{exception.__class__.__name__} occurred: {exception}')
+            return
+        except MultipleObjectsReturned as exception:
+            logger.error(f'{exception.__class__.__name__} occurred: {exception}')
+            orders = self.filter(order_id=order.order_id, event_id=order.event_id)
+            return orders[0]
+
+    def create_order(self, **kwargs):
+        """ Order create customization that send mail.
+
+            :return: new Order 
+        """
+        order = self.create(**kwargs)
+        send_template(
+            template_name=order.status_to_template(order.status),
+            email=order.email,
+            surname=order.surname,
+            name=order.name,
+        )
+        return order
+    
+    def save_order(self, order):
+        "Save (store) order and send template email."
+        order.save()
+        response = send_template(
+            template_name=order.status_to_template(order.status),
+            email=order.email,
+            surname=order.surname,
+            name=order.name,
+        )
+        return response
+
+    def update_order_status(self, order):
+        "Update order status and send template email."
+        try:
+            read_order = self.get(order_id=order.order_id, event_id=order.event_id)
+            read_order.status = order.status
+            read_order.save(update_fields=('status', ))
+        except ObjectDoesNotExist as exception:
+            logger.error(f'{exception.__class__.__name__} occurred: {exception}')
+            order.save()
+        except MultipleObjectsReturned as exception:
+            logger.error(f'{exception.__class__.__name__} occurred: {exception}')
+            orders = self.filter(order_id=order.order_id, event_id=order.event_id)
+            orders.update(status=order.status)
+        response = send_template(
+            template_name=order.status_to_template(order.status),
+            email=order.email,
+            surname=order.surname,
+            name=order.name,
+        )
+        return response
+
+    def update_orders_status(self, orders, status):
+        "Update orders status and send template emails."
+        responses = []
+        for order in orders:
+            current_tz = timezone.get_current_timezone()
+            expire_date = current_tz.normalize(
+                order.reg_date + timezone.timedelta(hours=80)
+            )
+            vars = [
+                {
+                    "name": "ddate",
+                    "content": expire_date.strftime('%d.%m.%Y')
+                },
+                {
+                    "name": "dtime",
+                    "content": expire_date.strftime('%H:%M')
+                },
+            ]
+            response = send_template(
+                template_name=order.status_to_template(status),
+                email=order.email,
+                surname=order.surname,
+                name=order.name,
+                vars=vars,
+            )
+            responses.append(response)
+            if (
+                isinstance(response, list) 
+                and len(response) 
+                and response[0].get('status') in ('sent', 'queued')
+            ):
+                order.status = status
+                order.save(update_fields=('status', ))
+        return responses
+
+    def send_order_reminder_one(self):
+        """ Check expired order and send reminder one. 
+            ticket-expiration1: 
+            следующий день в 9 утра по МСК, если билет не оплачен
+        """
+        reminder_date = timezone.now() - timezone.timedelta(days=1)
+        expire_date = timezone.now() - timezone.timedelta(days=2)
+        status = Order.STATUS_REMINDED_1
+        orders = self.filter(
+            status=Order.STATUS_NEW,
+            reg_date__lt=reminder_date,
+        ) & self.filter(
+            status=Order.STATUS_NEW,
+            reg_date__gt=expire_date,
+        )    
+        return Order.objects.update_orders_status(orders, status)
+
+    def send_order_reminder_two(self):
+        """ Check expired order and send reminder one. 
+            ticket-expiration2
+            через два дня в 9 утра по МСК, если билет не оплачен
+        """
+        reminder_date = timezone.now() - timezone.timedelta(days=2)
+        expire_date = timezone.now() - timezone.timedelta(hours=66)
+        status = Order.STATUS_REMINDED_2
+        orders = self.filter(
+            status__in=(
+                Order.STATUS_NEW,
+                Order.STATUS_REMINDED_1,
+            ), 
+            reg_date__lt=reminder_date,
+        ) & self.filter(
+            status__in=(
+                Order.STATUS_NEW,
+                Order.STATUS_REMINDED_1,
+            ), 
+            reg_date__gt=expire_date,
+        )  
+        return Order.objects.update_orders_status(orders, status)
+        
+    def send_order_reminder_three(self):
+        """ Check expired order and send reminder one. 
+
+            На TimePad установлен срок брони – 80 часов. 
+            Условие проверки №3: за 14 часов до конца брони, если билет
+            не оплачен, означает, что билет создан ранее на 66 часов,
+            чем время сейчас, на момент проверки.
+        """
+        reminder_date = timezone.now() - timezone.timedelta(hours=66)
+        expire_date = timezone.now() - timezone.timedelta(hours=80)
+        status = Order.STATUS_REMINDED_3
+        orders = self.filter(
+            status__in=(
+                Order.STATUS_NEW,
+                Order.STATUS_REMINDED_1,
+                Order.STATUS_REMINDED_2,
+            ), 
+            reg_date__lt=reminder_date,
+        ) & self.filter(
+            status__in=(
+                Order.STATUS_NEW,
+                Order.STATUS_REMINDED_1,
+                Order.STATUS_REMINDED_2,
+            ), 
+            reg_date__gt=expire_date,
+        )    
+        return Order.objects.update_orders_status(orders, status)
+        
+
+class Order(models.Model):
+    """ Order from the timepad.
+
         :param order_id: "4955686", ID заказа
-        :param reg_date: "2015-07-24 19:04:37", Дата заказа билета
+        :param event_id: 215813, ID мероприятия
         :param status: Статус заказа в машиночитаемом формате
+        :param reg_date: "2015-07-24 19:04:37", Дата заказа билета
         :param email: "test-mail@ya.ru", E-mail заказчика
         :param surname: "Смирнов", Фамилия на билете
         :param name: "Владимир", Имя на билете
-        :param printed_id: "5184211:83845994", ID билета печататется
-        :param event_name: название
+        :param payment_amount: сумма
+        :param pay_link: ссылка на оплату
     """
     STATUS_PAID = 'p'
     STATUS_CANCELED = 'c'
@@ -496,16 +661,16 @@ class Order(models.Model):
     payment_amount = models.IntegerField(
         'сумма',
     )
-    pay_link = models.CharField(
+    pay_link = models.URLField(
         'ссылка на оплату',
-        max_length=32,
+        max_length=128,
     ) 
 
     """ The reason why I’m saying queryset/managers is that in Django
         you can easily get one from the other, e.g. defining a queryset
         but then calling the as_manager().
     """
-    # objects = OrderQuerySet.as_manager()
+    objects = OrderQuerySet.as_manager()
 
     class Meta:
         verbose_name = 'заказ'
