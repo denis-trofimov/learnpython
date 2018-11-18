@@ -3,6 +3,7 @@ from __future__ import absolute_import, unicode_literals
 from celery import shared_task
 import json
 import logging
+from urllib.parse import urlsplit, urlunsplit
 from django.db import models
 from django.db.models import Q
 from django.utils import timezone
@@ -17,6 +18,31 @@ from .senders import send_template
 
 # Get an instance of a logger
 logger = logging.getLogger(__name__)
+
+class HookQuerySet(models.QuerySet):
+    def guid_exists(self, guid: str):
+        """ Check that hook guid exist."""
+        return self.filter(guid=guid).exists()
+
+class Hook(models.Model):
+    """ Hook received from Timepad.
+    
+        "hook_generated_at": "2018-11-17 02:04:04",
+        "hook_guid": "b4edbeb5-8544-418a-842c-d61171a5fecb"
+    """
+    guid = models.CharField(
+        'GUID',
+        max_length=37,
+    )
+    objects = HookQuerySet.as_manager()
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=['guid', ], 
+                name='guid_index'
+            ),
+        ]
 
 class TicketQuerySet(models.QuerySet):
     """ Ticket methods.
@@ -305,21 +331,6 @@ class Ticket(models.Model):
         f"Статус: {self.status}, E-mail: {self.email}, "
         f"Имя: {self.name}, Фамилия: {self.surname}")
 
-    def __repr__(self):
-        return f"""
-            ==================билет=====================
-            {self.id}: ID билета в БД
-            {self.printed_id}: ID билета (печататется на самом билете)
-            {self.event_id}: ID мероприятия
-            {self.order_id}: ID заказа
-            {self.reg_date}: Дата заказа билета
-            {self.status}: Статус заказа в машиночитаемом формате
-            {self.email}: E-mail заказчика
-            {self.surname}: Фамилия на билете
-            {self.name}: Имя на билете
-            ============================================
-            """
-
     @classmethod
     def get_status_from_raw(cls, status_raw: str) -> str:
         " Convert status_raw to constant statuses, None on fail."
@@ -399,3 +410,190 @@ class Ticket(models.Model):
             elif ticket:
                 return ticket, cls.objects.update_ticket_status(ticket)
             return ticket
+
+class Order(models.Model):
+    """ Ticket from the timepad.
+
+        :param event_id: 215813, ID мероприятия
+        :param order_id: "4955686", ID заказа
+        :param reg_date: "2015-07-24 19:04:37", Дата заказа билета
+        :param status: Статус заказа в машиночитаемом формате
+        :param email: "test-mail@ya.ru", E-mail заказчика
+        :param surname: "Смирнов", Фамилия на билете
+        :param name: "Владимир", Имя на билете
+        :param printed_id: "5184211:83845994", ID билета печататется
+        :param event_name: название
+    """
+    STATUS_PAID = 'p'
+    STATUS_CANCELED = 'c'
+    STATUS_NEW = 'n'
+    STATUS_REMINDED_1 ='1'
+    STATUS_REMINDED_2 ='2'
+    STATUS_REMINDED_3 ='3'
+    STATUS_CHOICES = (
+        (STATUS_NEW, 'новый'),
+        (STATUS_PAID, 'оплачено'),
+        (STATUS_CANCELED, 'отказ'),
+        (STATUS_REMINDED_1, 'напоминание 1'),
+        (STATUS_REMINDED_2, 'напоминание 2'),
+        (STATUS_REMINDED_3, 'напоминание 3'),
+    )
+    STATUS_TEMPLATE = {
+        STATUS_PAID: 'ticket-success',
+        STATUS_CANCELED: 'ticket-cancel',
+        STATUS_NEW: 'ticket-creation',
+        STATUS_REMINDED_1: "ticket-expiration1",
+        STATUS_REMINDED_2: "ticket-expiration2",
+        STATUS_REMINDED_3: "ticket-expiration3",
+    }
+
+    """ Status to action required correspondance.
+        paid (оплачено): платный билет успешно оплачен он-лайн
+        booked (забронировано): билет находится в статусе "Забронировано"
+        notpaid (просрочено): билет не был оплачен и срок брони для него истек
+        inactive (отказ): участник отказался от участия
+        booked_offline (бронь для выкупа): билет был заказан для выкупа в офисе 
+        организатора
+        paid_offline (оплачено на месте): билет был оплачен в офисе организатора
+        paid_ur (оплачено компанией): билет был оплачен юридическим платежом
+        transfer_payment (перенесена оплата): билет был оплачен переносом оплаты 
+        с другого заказа
+    """
+    STATUS_RAW_TO_CHOICE = {
+        'ok': STATUS_PAID,
+        'paid': STATUS_PAID,
+        'paid_ur': STATUS_PAID,
+        'paid_offline': STATUS_PAID,
+        'transfer_payment': STATUS_PAID,
+        'inactive': STATUS_CANCELED,
+        'notpaid': STATUS_CANCELED,
+        'booked': STATUS_NEW,
+        'booked_offline': STATUS_NEW,
+    }
+    order_id = models.IntegerField('ID')
+    event_id = models.IntegerField('ID мероприятия')
+    """ Статус заказа в машиночитаемом формате."""
+    status = models.CharField(
+        'статус',
+        max_length=1,
+        choices=STATUS_CHOICES,
+        default=STATUS_NEW,
+        blank=False,
+    )
+    """ "2018-11-17T02:04:02+0300", Дата заказа билета"""
+    reg_date  = models.DateTimeField('создан')
+    email = models.EmailField('e-mail')
+    name = models.CharField(
+        'имя',
+        max_length=20,
+        blank=True,
+    )
+    surname = models.CharField(
+        'фамилия',
+        max_length=32,
+        blank=True,
+    )    
+    payment_amount = models.IntegerField(
+        'сумма',
+    )
+    pay_link = models.CharField(
+        'ссылка на оплату',
+        max_length=32,
+    ) 
+
+    """ The reason why I’m saying queryset/managers is that in Django
+        you can easily get one from the other, e.g. defining a queryset
+        but then calling the as_manager().
+    """
+    # objects = OrderQuerySet.as_manager()
+
+    class Meta:
+        verbose_name = 'заказ'
+        verbose_name_plural = 'заказы'
+        # unique_together = (('order_id', 'event_id',),)
+        indexes = [
+            models.Index(
+                fields=['order_id', 'event_id',], 
+                name='unique_index'
+            ),
+            models.Index(
+                fields=['status', 'created_at',],
+                name='expiration_index' 
+            ),
+        ]    
+
+    def __str__(self):
+        return (
+            f"ID: {self.order_id}, 'ID мероприятия': {self.event_id}, "
+            f"Статус: {self.status}, "
+            f"ФИ: {self.surname} {self.name}, E-mail: {self.email}"
+        )
+
+    @classmethod
+    def get_status_from_raw(cls, status_raw: str) -> str:
+        " Convert status_raw to constant statuses, None on fail."
+        status = cls.STATUS_RAW_TO_CHOICE.get(status_raw)
+        return status
+
+    @staticmethod
+    def reg_date_to_datatime(reg_date: str) -> timezone.datetime:
+        """ Convert status_raw to constant statuses, None on fail.
+            :param reg_date: "2018-11-17T02:04:02+0300", Дата заказа билета
+            :return: timezone.datetime reg_date
+        """
+        try:
+            naive_datetime = timezone.datetime.strptime(
+                reg_date, '%Y-%m-%dT%H:%M:%S%z'
+            )
+            current_tz = timezone.get_current_timezone()
+            return current_tz.localize(naive_datetime) 
+        except BaseException as e:
+            logger.error(e)
+
+    @classmethod
+    def status_to_template(cls, status: str) -> str:
+        " Convert status to template_name, None on fail."
+        return cls.STATUS_TEMPLATE.get(status)
+
+    @classmethod
+    def dict_deserialize(cls, data: dict):
+        """ Deserialize a order from a Timepad JSON parsed to dict.
+        
+            :param data: a Timepad payload JSON parsed to dict.
+            :return: a Order instance or None on error.
+        """
+        try:
+            """https://moscowdjango.timepad.ru/partners/paymentStart/30577031/
+                ?method=ur&go=gogogo&from=widget
+            """
+            pay_link = data["_links"]["tp:pay"][0]["href"]
+            parse_result =urlsplit(pay_link)
+            pay_link = urlunsplit(
+                (
+                    parse_result.scheme, 
+                    parse_result.netloc, 
+                    parse_result.path,
+                )
+            )
+            order = cls(
+                order_id=int(data['id']),
+                event_id=int(data['event']['id']),
+                status=cls.get_status_from_raw(data['status']['name']),
+                reg_date=cls.reg_date_to_datatime(data['created_at']),
+                email=data['mail'],
+                name=data["answers"]['name'],
+                surname=data["answers"]['surname'],
+                payment_amount=int(data['payment']['amount']),
+                pay_link=pay_link,
+            )
+            order.full_clean()
+            return order
+        except (KeyError, ValueError) as exception:
+            logger.error(f'Deserialize {exception.__class__.__name__}: '
+            f'{exception}')
+            return
+        except ValidationError as exception:
+            logger.error(f'Deserialize {exception.__class__.__name__}: '
+            f'{exception}')
+            logger.error(f'Invalid data: {data}')
+            return 

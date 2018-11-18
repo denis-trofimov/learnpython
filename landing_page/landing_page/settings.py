@@ -175,3 +175,4 @@ CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 
 WATCHED_EVENTS = ('Learn Python 11', )
+WATCHED_EVENT_ID = (805226, )

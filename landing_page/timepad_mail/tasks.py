@@ -6,7 +6,7 @@ import json
 import mandrill
 from django.utils import timezone
 from django.conf import settings
-from .models import Ticket
+from .models import Ticket, Order, Hook
 
 
 # Get an instance of a logger
@@ -86,7 +86,42 @@ def preprocess_order_payload(payload: str):
     except json.JSONDecodeError as exception:
         logger.error(f'{exception.__class__.__name__}: {exception}')
         return
-    print(json.dumps(payload_dict, indent=2))
+
+    status = Order.get_status_from_raw(payload_dict.get('status').get('name'))
+    event_id = payload_dict.get('event').get('id')
+    guid = payload_dict.get('hook_guid')
+    if not status:
+        logger.info(f"{status} is not targeted.")
+        return
+    elif not event_id in settings.WATCHED_EVENT_ID:
+        """ If an event is not in campaign, no action required."""
+        logger.info(f"{event_id} is not in campaign, no action required.")
+        return
+    
+    """ Create hook if not exists, else abort processing."""
+    if Hook.objects.guid_exists(guid):
+        logger.info(f"Hook {guid} is repeating.")
+        return
+    else:
+        hook = Hook(guid=guid)
+        hook.save()
+
+    return payload_dict
+
+@shared_task
+def process_order_dict(payload_dict: dict):
+    """ Check valid and process a dictionary holding order values.
+
+        :param payload_dict: a dictionary holding order values.
+        :return: a ManDrill server response or None on error.
+    """
+    order = Order.dict_deserialize(payload_dict)
+    if not order:
+        return
+    elif order.status == Order.STATUS_NEW:
+        return Order.objects.save_ticket(order)
+    else:
+        return Order.objects.update_ticket_status(order)
 
 @shared_task
 def process_order_payload(payload: str):
