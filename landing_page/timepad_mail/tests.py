@@ -203,32 +203,32 @@ class TicketTest(TestCase):
         self.assertEqual(ticket.surname, data['surname'])
         self.assertEqual(ticket.printed_id, data['id'])
 
-    def test_send_ticket_reminder_one(self):
+    def test_send_reminder_one(self):
         self.ticket = Ticket.dict_deserialize(self.ticket_dict)
         self.ticket.reg_date = timezone.now() - timezone.timedelta(days=1, hours=1)
         self.ticket.save()
         self.assertLessEqual(timezone.timedelta(days=1), timezone.now() - self.ticket.reg_date)
-        responses = Ticket.objects.send_ticket_reminder_one()
+        responses = Ticket.objects.send_reminder_one()
         for response in responses:
             self.assertIn(response[0]['status'], ('sent', 'queued'))
         ticket = Ticket.objects.get_ticket(self.ticket)
         self.assertEqual(ticket.status, Ticket.STATUS_REMINDED_1)
 
-    def test_send_ticket_reminder_two(self):
+    def test_send_reminder_two(self):
         self.ticket = Ticket.dict_deserialize(self.ticket_dict)
         self.ticket.reg_date = timezone.now() - timezone.timedelta(days=2, hours=1)
         self.ticket.save()
-        responses = Ticket.objects.send_ticket_reminder_two()
+        responses = Ticket.objects.send_reminder_two()
         for response in responses:
             self.assertIn(response[0]['status'], ('sent', 'queued'))
         ticket = Ticket.objects.get_ticket(self.ticket)
         self.assertEqual(ticket.status, Ticket.STATUS_REMINDED_2)
 
-    def test_send_ticket_reminder_three(self):
+    def test_send_reminder_three(self):
         self.ticket = Ticket.dict_deserialize(self.ticket_dict)
         self.ticket.reg_date = timezone.now() - timezone.timedelta(hours=70)
         self.ticket.save()
-        responses = Ticket.objects.send_ticket_reminder_three()
+        responses = Ticket.objects.send_reminder_three()
         for response in responses:
             self.assertIn(response[0]['status'], ('sent', 'queued'))
         ticket = Ticket.objects.get_ticket(self.ticket)

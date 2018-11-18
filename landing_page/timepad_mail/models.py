@@ -139,7 +139,7 @@ class TicketQuerySet(models.QuerySet):
                 ticket.save(update_fields=('status', ))
         return responses
 
-    def send_ticket_reminder_one(self):
+    def send_reminder_one(self):
         """ Check expired ticket and send reminder one. 
             ticket-expiration1: 
             следующий день в 9 утра по МСК, если билет не оплачен
@@ -156,7 +156,7 @@ class TicketQuerySet(models.QuerySet):
         )    
         return Ticket.objects.update_tickets_status(tickets, status)
 
-    def send_ticket_reminder_two(self):
+    def send_reminder_two(self):
         """ Check expired ticket and send reminder one. 
             ticket-expiration2
             через два дня в 9 утра по МСК, если билет не оплачен
@@ -179,7 +179,7 @@ class TicketQuerySet(models.QuerySet):
         )  
         return Ticket.objects.update_tickets_status(tickets, status)
         
-    def send_ticket_reminder_three(self):
+    def send_reminder_three(self):
         """ Check expired ticket and send reminder one. 
 
             На TimePad установлен срок брони – 80 часов. 
@@ -425,29 +425,34 @@ class OrderQuerySet(models.QuerySet):
             logger.error(f'{exception.__class__.__name__} occurred: {exception}')
             orders = self.filter(order_id=order.order_id, event_id=order.event_id)
             return orders[0]
-
-    def create_order(self, **kwargs):
-        """ Order create customization that send mail.
-
-            :return: new Order 
-        """
-        order = self.create(**kwargs)
-        send_template(
-            template_name=order.status_to_template(order.status),
-            email=order.email,
-            surname=order.surname,
-            name=order.name,
-        )
-        return order
     
     def save_order(self, order):
         "Save (store) order and send template email."
         order.save()
+        current_tz = timezone.get_current_timezone()
+        expire_date = current_tz.normalize(
+            order.reg_date + timezone.timedelta(hours=80)
+        )
+        vars = [
+            {
+                "name": "paylink",
+                "content": order.pay_link,
+            },
+            {
+                "name": "ddate",
+                "content": expire_date.strftime('%d.%m.%Y')
+            },
+            {
+                "name": "dtime",
+                "content": expire_date.strftime('%H:%M')
+            },
+        ]            
         response = send_template(
             template_name=order.status_to_template(order.status),
             email=order.email,
             surname=order.surname,
             name=order.name,
+            vars=vars,
         )
         return response
 
@@ -464,11 +469,30 @@ class OrderQuerySet(models.QuerySet):
             logger.error(f'{exception.__class__.__name__} occurred: {exception}')
             orders = self.filter(order_id=order.order_id, event_id=order.event_id)
             orders.update(status=order.status)
+        current_tz = timezone.get_current_timezone()
+        expire_date = current_tz.normalize(
+            order.reg_date + timezone.timedelta(hours=80)
+        )
+        vars = [
+            {
+                "name": "paylink",
+                "content": order.pay_link,
+            },
+            {
+                "name": "ddate",
+                "content": expire_date.strftime('%d.%m.%Y')
+            },
+            {
+                "name": "dtime",
+                "content": expire_date.strftime('%H:%M')
+            },
+        ]            
         response = send_template(
             template_name=order.status_to_template(order.status),
             email=order.email,
             surname=order.surname,
             name=order.name,
+            vars=vars,
         )
         return response
 
@@ -481,6 +505,10 @@ class OrderQuerySet(models.QuerySet):
                 order.reg_date + timezone.timedelta(hours=80)
             )
             vars = [
+                {
+                    "name": "paylink",
+                    "content": order.pay_link,
+                },
                 {
                     "name": "ddate",
                     "content": expire_date.strftime('%d.%m.%Y')
@@ -507,7 +535,7 @@ class OrderQuerySet(models.QuerySet):
                 order.save(update_fields=('status', ))
         return responses
 
-    def send_order_reminder_one(self):
+    def send_reminder_one(self):
         """ Check expired order and send reminder one. 
             ticket-expiration1: 
             следующий день в 9 утра по МСК, если билет не оплачен
@@ -524,7 +552,7 @@ class OrderQuerySet(models.QuerySet):
         )    
         return Order.objects.update_orders_status(orders, status)
 
-    def send_order_reminder_two(self):
+    def send_reminder_two(self):
         """ Check expired order and send reminder one. 
             ticket-expiration2
             через два дня в 9 утра по МСК, если билет не оплачен
@@ -547,7 +575,7 @@ class OrderQuerySet(models.QuerySet):
         )  
         return Order.objects.update_orders_status(orders, status)
         
-    def send_order_reminder_three(self):
+    def send_reminder_three(self):
         """ Check expired order and send reminder one. 
 
             На TimePad установлен срок брони – 80 часов. 
