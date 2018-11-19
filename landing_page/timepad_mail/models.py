@@ -741,14 +741,9 @@ class Order(models.Model):
             :param reg_date: "2018-11-17T02:04:02+0300", Дата заказа билета
             :return: timezone.datetime reg_date
         """
-        try:
-            naive_datetime = timezone.datetime.strptime(
+        return timezone.datetime.strptime(
                 reg_date, '%Y-%m-%dT%H:%M:%S%z'
             )
-            current_tz = timezone.get_current_timezone()
-            return current_tz.localize(naive_datetime) 
-        except BaseException as e:
-            logger.error(e)
 
     @classmethod
     def status_to_template(cls, status: str) -> str:
