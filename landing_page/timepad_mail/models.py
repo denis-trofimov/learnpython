@@ -717,7 +717,7 @@ class Order(models.Model):
                 name='unique_index'
             ),
             models.Index(
-                fields=['status', 'created_at',],
+                fields=['status', 'reg_date',],
                 name='expiration_index' 
             ),
         ]    
