@@ -394,8 +394,7 @@ class OrderTest(TestCase):
         self.assertEqual(order.name, data["answers"]['name'])
         self.assertEqual(order.surname, data["answers"]['surname'])
         self.assertEqual(order.payment_amount, int(data['payment']['amount']))
-        self.assertEqual(order.full_clean(), True)
-
+        order.full_clean()
 
     def test_send_reminder_one(self):
         self.order = Order.dict_deserialize(self.order_dict)
