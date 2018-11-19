@@ -768,6 +768,8 @@ class Order(models.Model):
                     parse_result.scheme, 
                     parse_result.netloc, 
                     parse_result.path,
+                    '',
+                    '',
                 )
             )
             order = cls(
