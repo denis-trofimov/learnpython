@@ -374,14 +374,18 @@ class OrderTest(TestCase):
 
     def setUp(self):
         "Create new order."
-        self.order_dict = json.load('order.json')
-        
+        with open('/home/denis/p/learnpython/landing_page/timepad_mail/order.json', 'rt') as file:
+            self.order_dict = json.load(file)
+      
     def test_dict_deserialize(self):
         data = self.order_dict
         order = Order.dict_deserialize(data)
         self.assertEqual(order.order_id, int(data['id']))
         self.assertEqual(order.event_id, int(data['event']['id']))
-        self.assertEqual(order.status, Order.get_status_from_raw(data['status']['name'])
+        self.assertEqual(
+            order.status, 
+            Order.get_status_from_raw(data['status']['name'])
+        )
         self.assertEqual(
             order.reg_date, 
             Order.reg_date_to_datatime(data['created_at'])
